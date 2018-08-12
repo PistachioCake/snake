@@ -3,6 +3,7 @@ module Main where
 import Graphics.Gloss
 import Graphics.Gloss.Interface.IO.Game
 import System.Random
+import System.Exit (exitSuccess)
 import Lib
 
 (<@>) :: (Applicative f) => f (a -> b) -> a -> f b
@@ -10,42 +11,57 @@ f <@> a = f <*> pure a
 infixl 4 <@>
 
 main :: IO ()
-main = playIO window bkg fps initialState renderIO handleEventsIO update
+main = playIO window bkg fps initialState renderIO handleEvents update
     where 
-        window = InWindow "Test" (600, 400) (10, 10)
+        window = InWindow "Snake" (height * squareSize, width * squareSize) (10, 10)
         bkg = black
-        fps = 5
+        fps = 10
         renderIO :: Game -> IO Picture
         renderIO g = return $ render g
-        handleEventsIO :: Event -> Game -> IO Game
-        handleEventsIO e g = return $ handleEvents e g
 
 
 initialState :: Game
 initialState = Begin
 
 update :: Float -> Game -> IO Game
-update _ Begin = Game <$> getStdGen <@> 0 <@> up <@> Unit (0, 0) <@> [Unit (0, 0)]
-update _ (Game gen oldadd vel@(velx, vely) food snake) = 
-    let front = head snake
-        (Unit frontPos) = front
-        add = oldadd + if front == food then 3 else 0
-        end = drop 1 $ if add > 0 then init snake else snake
-    in 
-        if front == food then
-            let (x, gen') = randomR (-10, 10) gen
-                (y, gen'') = randomR (-15, 15) gen'
-            in return $ Game gen'' (oldadd + 2) vel (Unit (x, y)) $ Unit (velx + fst frontPos, vely + snd frontPos):snake
-        else
-            return $ Game gen (max 0 (oldadd - 1)) vel food $ Unit (velx + fst frontPos, vely + snd frontPos):(if oldadd > 0 then snake else init snake)
+update _ Begin = return Begin
+update _ (Lose {_score = score}) = return $ Lose score
+update _ game = 
+    if hasLost game 
+    then return $ Lose $ (length $ _snake game) `div` 3 - 1
+    else return . moveSnake . eatFood $ game
 
-handleEvents :: Event -> Game -> Game
-handleEvents (EventKey key Down _ _) (Game gen add vel food snake) = 
-    let newvel = case key of
-            SpecialKey KeyUp -> up
-            SpecialKey KeyDown -> down
-            SpecialKey KeyLeft -> left
-            SpecialKey KeyRight -> right
-            _ -> vel
-    in Game gen add newvel food snake
-handleEvents _ game = game
+moveSnake :: Game -> Game
+moveSnake game@(Game {_add = add, _vel = (velx, vely), _snake = snake}) = 
+    let Unit (frontx, fronty) = head snake
+    in game {_add = max 0 (add - 1), _snake = Unit (velx + frontx, vely + fronty):(if add > 0 then snake else init snake)}
+
+eatFood :: Game -> Game
+eatFood game@(Game {_add = add, _food = food, _snake = (front:_)}) = 
+    if front == food then mkNextFood $ game {_add = add + 3} else game
+
+mkNextFood :: Game -> Game
+mkNextFood game@(Game {_gen = gen, _snake = snake}) = 
+    let (x, gen') = randomR boundX gen
+        (y, gen'') = randomR boundY gen'
+        food = Unit (x, y)
+    in if food `elem` snake then mkNextFood $ game {_gen = gen''} else game {_gen = gen'', _food = food}
+
+hasLost :: Game -> Bool
+hasLost game@(Game {_snake = (front:tail)}) = wallCollision || tailCollision
+    where
+        wallCollision = 
+            let notInRange (l, h) a = a < l || h < a
+                (Unit (x, y)) = front
+            in notInRange boundX x || notInRange boundY y
+        tailCollision = front `elem` tail
+
+handleEvents :: Event -> Game -> IO Game
+handleEvents (EventKey (SpecialKey KeySpace) Down _ _) Begin = Game <$> getStdGen <@> 0 <@> up <@> Unit (0, 0) <@> [Unit (0, 0)]
+handleEvents (EventKey (Char 'r') Down _ _) (Lose s) = Game <$> getStdGen <@> 0 <@> up <@> Unit (0, 0) <@> [Unit (0, 0)]
+handleEvents (EventKey (SpecialKey KeyUp) Down _ _) game@(Game { }) = return game {_vel = up}
+handleEvents (EventKey (SpecialKey KeyDown) Down _ _) game@(Game { }) = return game {_vel = down}
+handleEvents (EventKey (SpecialKey KeyLeft) Down _ _) game@(Game { }) = return game {_vel = left}
+handleEvents (EventKey (SpecialKey KeyRight) Down _ _) game@(Game { }) = return game {_vel = right}
+handleEvents (EventKey (Char 'q') Down _ _) _ = exitSuccess
+handleEvents _ game = return game
